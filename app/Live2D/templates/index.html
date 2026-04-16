@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Point Annotation Tool (Clean Version)</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h2 { color: #333; }
+        
+        .controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-mode { background-color: #e0e0e0; color: #333; }
+        .btn-mode.active { background-color: #007bff; color: white; }
+        .btn-reset { background-color: #dc3545; color: white; }
+
+        .size-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #555;
+            border-left: 1px solid #ddd;
+            padding-left: 15px;
+        }
+        input[type=range] { cursor: pointer; }
+        #size-value { font-weight: bold; color: #007bff; width: 30px; text-align: right; }
+
+        .container {
+            position: relative;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: #fff;
+            user-select: none; 
+        }
+
+        #source-image {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            pointer-events: none; 
+        }
+
+        #svg-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            cursor: crosshair;
+            touch-action: none;
+        }
+
+        .trajectory-line {
+            stroke: #ff0000;
+            stroke-width: 2;
+            stroke-dasharray: 5, 5;
+            opacity: 0.8;
+            pointer-events: none;
+        }
+
+        .point-t0 { fill: red; stroke: white; stroke-width: 1.5px; pointer-events: none; }
+        .point-t1 { fill: green; stroke: black; stroke-width: 1.5px; cursor: pointer; transition: r 0.1s, fill 0.1s; }
+        .point-t1.selected {
+            fill: #ffcc00;
+            stroke: #d35400;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+        }
+
+        .data-panel {
+            margin-top: 20px;
+            width: 800px;
+            max-width: 95%;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%; height: 150px;
+            font-family: monospace; font-size: 12px;
+            border: 1px solid #ccc; border-radius: 4px;
+            padding: 10px; box-sizing: border-box; resize: vertical;
+        }
+        .status-msg { margin-left: 10px; font-size: 14px; color: #666; font-weight: 500; }
+        .hint { font-size: 12px; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h2>Image Point Annotation Tool (Clean Version)</h2>
+
+    <div class="controls">
+        <button id="btn-create" class="btn-mode active" onclick="setMode('create')">🔴 Create</button>
+        <button id="btn-drag" class="btn-mode" onclick="setMode('drag')">🟢 Drag</button>
+        <button class="btn-reset" onclick="resetPoints()">Reset</button>
+        <button id="btn-track" class="btn-mode" onclick="sendTrackPoints()" style="background-color: #6f42c1; color: white;">📡 CoTracker Track</button>
+        
+        <div class="size-control">
+            <label for="point-size-slider">Point Size:</label>
+            <input type="range" id="point-size-slider" min="3" max="20" value="6" step="1">
+            <span id="size-value">6</span>px
+        </div>
+
+        <span id="status-msg" class="status-msg">Current Mode: Create</span>
+    </div>
+    <div class="hint" id="mode-hint">Tip: Click blank area to add points, adjust position in drag mode.</div>
+
+    <div class="container" id="img-container">
+        <img id="source-image" src="{{ image_src }}" alt="Loading image..." crossorigin="anonymous">
+        <svg id="svg-overlay"></svg>
+    </div>
+
+    <div class="data-panel">
+        <h3>Coordinate Data (Real-time)</h3>
+        <textarea id="data-output" readonly>Waiting for operation...</textarea>
+    </div>
+
+    <script>
+        let pointsT0 = [], pointsT1 = [];
+        let currentMode = 'create';
+        let selectedIndex = -1;
+        let isDragging = false;
+        let baseRadius = 6;
+        let selectedRadius = 10;
+        const fps=10;
+        let imageUpdateTimer = null;
+        
+        const svg = document.getElementById('svg-overlay');
+        const img = document.getElementById('source-image');
+        const statusMsg = document.getElementById('status-msg');
+        const modeHint = document.getElementById('mode-hint');
+        const dataOutput = document.getElementById('data-output');
+        const sizeSlider = document.getElementById('point-size-slider');
+        const sizeValueDisplay = document.getElementById('size-value');
+        
+        let lastSendTime = 0;
+        const SEND_INTERVAL = 100; 
+
+        function sendPointsThrottled(triggerImage) {
+            const now = Date.now();
+            if (now - lastSendTime > SEND_INTERVAL) {
+                lastSendTime = now;
+                sendPointsToBackend(triggerImage);
+            }
+        }
+
+        sizeSlider.addEventListener('input', function(e) {
+            baseRadius = parseInt(e.target.value);
+            selectedRadius = Math.max(baseRadius + 2, Math.floor(baseRadius * 1.6));
+            sizeValueDisplay.textContent = baseRadius;
+            if (pointsT0.length > 0) renderPoints();
+        });
+
+        img.onload = function() {
+            const w = img.naturalWidth, h = img.naturalHeight;
+            svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+            svg.style.width = '100%';
+            svg.style.height = '100%';
+            baseRadius = parseInt(sizeSlider.value);
+            selectedRadius = Math.max(baseRadius + 2, Math.floor(baseRadius * 1.6));
+            updateDataText();
+        };
+
+        function setMode(mode) {
+            currentMode = mode;
+            selectedIndex = -1;
+            isDragging = false;
+            renderPoints();
+            updateDataText();
+            
+            document.getElementById('btn-create').classList.toggle('active', mode === 'create');
+            document.getElementById('btn-drag').classList.toggle('active', mode === 'drag');
+            
+            if (mode === 'create') {
+                statusMsg.textContent = "Current Mode: Create";
+                modeHint.textContent = "Tip: Click anywhere on the image to add a new point pair.";
+                svg.style.cursor = "crosshair";
+                if (imageUpdateTimer) clearInterval(imageUpdateTimer);
+            } else {
+                statusMsg.textContent = "Current Mode: Drag";
+                modeHint.textContent = "Tip: 1.Click green point to select -> 2.Move mouse to adjust -> 3.Click again to confirm.";
+                svg.style.cursor = "default";
+                if (!imageUpdateTimer) {
+                    imageUpdateTimer = setInterval(fetchCurrentImage, 1000/fps);
+                    fetchCurrentImage();
+                }
+            }
+        }
+
+        function getSVGPoint(evt) {
+            const pt = svg.createSVGPoint();
+            pt.x = evt.clientX; pt.y = evt.clientY;
+            const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+            return { x: svgP.x, y: svgP.y };
+        }
+
+        svg.addEventListener('mousedown', function(evt) {
+            if (evt.button !== 0) return;
+            const { x, y } = getSVGPoint(evt);
+
+            if (currentMode === 'create') {
+                pointsT0.push({x, y});
+                pointsT1.push({x, y});
+                renderPoints();
+                updateDataText();
+            } else if (currentMode === 'drag') {
+                if (selectedIndex !== -1) {
+                    selectedIndex = -1;
+                    isDragging = false;
+                    statusMsg.textContent = "Position confirmed";
+                    renderPoints();
+                    updateDataText();
+                    sendPointsThrottled(true); 
+                } else {
+                    const threshold = Math.max(10, baseRadius * 2.5);
+                    let found = -1;
+                    for (let i = pointsT1.length - 1; i >= 0; i--) {
+                        const p = pointsT1[i];
+                        if (Math.sqrt((x - p.x)**2 + (y - p.y)**2) < threshold) {
+                            found = i; break;
+                        }
+                    }
+                    if (found !== -1) {
+                        selectedIndex = found;
+                        statusMsg.textContent = `Selected Point #${found}, move mouse to adjust`;
+                        renderPoints();
+                    } else {
+                        selectedIndex = -1;
+                        renderPoints();
+                        statusMsg.textContent = "No point selected";
+                    }
+                }
+            }
+        });
+
+        svg.addEventListener('mousemove', function(evt) {
+            if (currentMode !== 'drag' || selectedIndex === -1) return;
+            const { x, y } = getSVGPoint(evt);
+            pointsT1[selectedIndex] = { x, y };
+            updateDragVisualization(selectedIndex, x, y);
+            updateDataText();
+            sendPointsThrottled(true); 
+            if (!isDragging) {
+                isDragging = true;
+                statusMsg.textContent = `Moving Point #${selectedIndex}...`;
+            }
+        });
+
+        function renderPoints() {
+            while (svg.firstChild) svg.removeChild(svg.firstChild);
+            
+            pointsT0.forEach((p0, i) => {
+                const p1 = pointsT1[i];
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                line.setAttribute("x1", p0.x); line.setAttribute("y1", p0.y);
+                line.setAttribute("x2", p1.x); line.setAttribute("y2", p1.y);
+                line.setAttribute("class", "trajectory-line");
+                if (i === selectedIndex) {
+                    line.setAttribute("stroke", "#ffaa00");
+                    line.setAttribute("stroke-width", "3");
+                    line.setAttribute("stroke-dasharray", "0");
+                    line.setAttribute("opacity", "1");
+                    line.setAttribute("id", `line-${i}`);
+                } else {
+                    line.setAttribute("id", `line-${i}`);
+                }
+                svg.appendChild(line);
+            });
+
+            pointsT0.forEach(p => {
+                const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+                c.setAttribute("r", baseRadius); c.setAttribute("class", "point-t0");
+                svg.appendChild(c);
+            });
+
+            pointsT1.forEach((p, i) => {
+                const isSelected = (i === selectedIndex);
+                const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+                c.setAttribute("r", isSelected ? selectedRadius : baseRadius);
+                c.setAttribute("class", isSelected ? "point-t1 selected" : "point-t1");
+                c.style.pointerEvents = "none";
+                svg.appendChild(c);
+            });
+        }
+
+        function updateDragVisualization(index, newX, newY) {
+            const line = document.getElementById(`line-${index}`);
+            if (line) { line.setAttribute("x2", newX); line.setAttribute("y2", newY); }
+            
+            const idx = pointsT0.length * 2 + index; 
+            const pointNode = svg.children[idx];
+            if (pointNode) { pointNode.setAttribute("cx", newX); pointNode.setAttribute("cy", newY); }
+        }
+
+        function updateDataText() {
+            if (pointsT0.length === 0) {
+                dataOutput.value = "No data";
+                return;
+            }
+            let text = `# Total Points: ${pointsT0.length}\n\n`;
+            pointsT0.forEach((p, i) => {
+                const p1 = pointsT1[i];
+                const mark = (i === selectedIndex) ? " <-- [Editing]" : "";
+                text += `Point ${i}: [${p.x.toFixed(1)}, ${p.y.toFixed(1)}] -> [${p1.x.toFixed(1)}, ${p1.y.toFixed(1)}]${mark}\n`;
+            });
+            dataOutput.value = text;
+        }
+
+        function resetPoints() {
+            if(pointsT0.length === 0) return;
+            if(confirm("Are you sure you want to delete all points?")) {
+                pointsT0 = []; pointsT1 = [];
+                selectedIndex = -1; isDragging = false;
+                renderPoints(); updateDataText();
+                statusMsg.textContent = "Reset completed";
+                sendPointsToBackend(false);
+            }
+        }
+
+        async function sendPointsToBackend(triggerImage) {
+            try {
+                const t0 = pointsT0.map(p => [p.x.toFixed(1), p.y.toFixed(1)]);
+                const t1 = pointsT1.map(p => [p.x.toFixed(1), p.y.toFixed(1)]);
+                const response = await fetch('/api/points', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        t0: t0,
+                        t1: t1,
+                        trigger_image: triggerImage 
+                    })
+                });
+                const result = await response.json();
+                console.log("Data sent:", result);
+            } catch (error) {
+                console.error("Failed to send data:", error);
+            }
+        }
+
+        async function sendTrackPoints() {
+            if (pointsT0.length === 0) {
+                alert("Please create at least one point first!");
+                return;
+            }
+            
+            const trackPoints = pointsT0.map(p => [parseFloat(p.x.toFixed(1)), parseFloat(p.y.toFixed(1))]);
+            
+            try {
+                const response = await fetch('/api/cotracker-track', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        t0_points: trackPoints  
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.status === "success") {
+                    statusMsg.textContent = `✅ Sent ${trackPoints.length} tracking points`;
+                    console.log("CoTracker tracking points sent successfully:", result);
+                } else {
+                    statusMsg.textContent = "❌ Failed to send tracking points";
+                    console.error("Send failed:", result);
+                }
+            } catch (error) {
+                statusMsg.textContent = "❌ Network error";
+                console.error("Error sending tracking points:", error);
+            }
+        }
+
+        async function fetchCurrentImage() {
+            try {
+                const response = await fetch('/api/current-image');
+                const result = await response.json();
+                if (result.image_src && img.src !== result.image_src) {
+                    img.src = result.image_src;
+                    statusMsg.textContent = `Current Mode: Drag | Image updated: ${result.image_src}`;
+                    
+                    if (result.t0_points && Array.isArray(result.t0_points) && result.t0_points.length > 0) {
+                        pointsT0 = result.t0_points.map(p => ({x: p[0], y: p[1]}));
+                        if (pointsT1.length === 0) {
+                            pointsT1 = [...pointsT0];
+                        }
+                        renderPoints();
+                        updateDataText();
+                        statusMsg.textContent += ` | T0 points updated (Total ${pointsT0.length})`;
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to fetch latest image:", error);
+            }
+        }
+
+        window.addEventListener('beforeunload', function() {
+            if (imageUpdateTimer) clearInterval(imageUpdateTimer);
+        });
+    </script>
+</body>
+</html>
