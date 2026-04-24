@@ -8,7 +8,7 @@ from pathlib import Path
 from tqdm import tqdm  # 引入 tqdm
 from utils import gen_tracks,v2i
 # ================= 1. 数据集定义 =================
-SAMPLE_GAP = 3
+SAMPLE_GAP = 5
 
 class TrackGridDataset(Dataset):
     """数据集类：负责加载 .npy 文件并构建正负样本索引"""
@@ -206,12 +206,12 @@ def train_model(folder_path, grid_size=48, epochs=15, batch_size=64, lr=1e-3, ro
 
 # ================= 4. 主程序入口 =================
 if __name__ == "__main__":
-    ROOT = Path("pet")
+    ROOT = Path("nuero/f2l")
     BASE = ROOT / "videos"
     DATA_FOLDER = BASE / "track"
     
     GRID_SIZE = 48
-    EPOCHS = 200
+    EPOCHS = 150
     BATCH_SIZE = 64
     
     v2i(ROOT)  # 生成图数据

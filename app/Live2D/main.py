@@ -17,7 +17,7 @@ import numpy as np
 import models
 from PIL import Image  
 from pathlib import Path
-BASE_PATH = "pet"# 核心基础路径（无前置/）
+BASE_PATH = "nuero/f2l"# 核心基础路径（无前置/）
 
 # BASE_DIR="pet"
 models.BASE_DIR = BASE_PATH
@@ -26,7 +26,7 @@ models.IMAGES_DIR = os.path.join(BASE_PATH, "images")
 models.TRACKS_DIR = os.path.join(BASE_PATH, "track")
 models.load_graph()
   
-IMAGE_BASE_REL_DIR = os.path.join(BASE_PATH, "images", "video_00008")
+IMAGE_BASE_REL_DIR = os.path.join(BASE_PATH, "images", "video_00014")
 IMAGE_BASE_PHYSICAL_DIR = os.path.abspath(IMAGE_BASE_REL_DIR)
 current_image_path = os.path.join(IMAGE_BASE_REL_DIR, "000000.png")  
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".bmp"]
@@ -188,8 +188,8 @@ async def listen_points_update():
                 last_points_hash = current_hash
                 add_image_to_queue() 
                 print(f"🔄 检测到点数据更新，队列长度: {len(image_path_queue)}")
-        
-        await asyncio.sleep(0.1) 
+            
+        await asyncio.sleep(0.5) 
 
 # --------------------------
 # 8. 启动监听任务（仅启动一次）
