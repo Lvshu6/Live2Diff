@@ -40,7 +40,7 @@ def run_cotracker(video, queries):
 
 
         
-BASE_DIR="pet"
+BASE_DIR="nuero"
 GRAPH_PATH = os.path.join(BASE_DIR, "graph.txt")
 IMAGES_DIR = os.path.join(BASE_DIR, "images")
 TRACKS_DIR = os.path.join(BASE_DIR, "track")

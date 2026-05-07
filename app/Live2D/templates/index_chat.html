@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live2Diff - Image Point Annotation + AI Chat</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h2 { color: #333; margin: 0 0 12px; }
+
+        /* ---- controls ---- */
+        .controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-mode { background-color: #e0e0e0; color: #333; }
+        .btn-mode.active { background-color: #007bff; color: white; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        .size-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #555;
+            border-left: 1px solid #ddd;
+            padding-left: 15px;
+        }
+        input[type=range] { cursor: pointer; }
+        #size-value { font-weight: bold; color: #007bff; width: 30px; text-align: right; }
+
+        /* ---- main layout: image + chat side by side ---- */
+        .main-layout {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+            width: 100%;
+            max-width: 1400px;
+        }
+
+        /* ---- image area ---- */
+        .image-area { flex: 0 0 auto; }
+        .container {
+            position: relative;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: #fff;
+            user-select: none;
+        }
+        #source-image {
+            display: block;
+            max-width: 800px;
+            height: auto;
+            pointer-events: none;
+        }
+        #svg-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            cursor: crosshair;
+            touch-action: none;
+        }
+        .trajectory-line {
+            stroke: #ff0000;
+            stroke-width: 2;
+            stroke-dasharray: 5, 5;
+            opacity: 0.8;
+            pointer-events: none;
+        }
+        .point-t0 { fill: red; stroke: white; stroke-width: 1.5px; pointer-events: none; }
+        .point-t1 { fill: green; stroke: black; stroke-width: 1.5px; cursor: pointer; transition: r 0.1s, fill 0.1s; }
+        .point-t1.selected {
+            fill: #ffcc00;
+            stroke: #d35400;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+        }
+
+        /* ---- data panel (below image) ---- */
+        .data-panel {
+            margin-top: 15px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .data-panel h3 { margin: 0 0 8px; font-size: 14px; color: #555; }
+        textarea {
+            width: 100%;
+            height: 100px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 8px;
+            resize: vertical;
+        }
+
+        .status-msg { margin-left: 10px; font-size: 14px; color: #666; font-weight: 500; }
+        .hint { font-size: 12px; color: #888; margin-bottom: 8px; }
+
+        /* ---- chat wrapper: session sidebar + chat panel ---- */
+        .chat-wrapper {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        /* ---- session sidebar ---- */
+        .session-sidebar {
+            flex: 0 0 160px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.12);
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 160px);
+            min-height: 500px;
+            overflow: hidden;
+        }
+        .session-sidebar-header {
+            padding: 12px 12px 8px;
+            font-weight: bold;
+            font-size: 13px;
+            color: #333;
+            border-bottom: 1px solid #eee;
+        }
+        .btn-new-session {
+            margin: 8px;
+            padding: 7px 0;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            width: calc(100% - 16px);
+        }
+        .btn-new-session:hover { background: #0069d9; }
+        .session-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .session-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #444;
+            transition: background 0.15s;
+            word-break: break-all;
+        }
+        .session-item:hover { background: #f0f4ff; }
+        .session-item.active { background: #e8f0fe; color: #1a73e8; font-weight: bold; }
+        .session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .btn-del-session {
+            background: none;
+            border: none;
+            color: #bbb;
+            font-size: 15px;
+            cursor: pointer;
+            padding: 0 2px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .btn-del-session:hover { color: #dc3545; }
+
+        /* ---- chat panel ---- */
+        .chat-panel {
+            flex: 1 1 0;
+            min-width: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.12);
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 160px);
+            min-height: 500px;
+        }
+        .chat-header {
+            padding: 12px 16px;
+            background: #007bff;
+            color: white;
+            border-radius: 8px 8px 0 0;
+            font-weight: bold;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .chat-header .api-status {
+            font-size: 12px;
+            font-weight: normal;
+            opacity: 0.85;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .msg {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .msg.user {
+            align-self: flex-end;
+            background: #007bff;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .msg.assistant {
+            align-self: flex-start;
+            background: #f0f0f0;
+            color: #222;
+            border-bottom-left-radius: 4px;
+        }
+        .msg.assistant.streaming::after {
+            content: '▌';
+            animation: blink 0.8s step-end infinite;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        .msg.error {
+            align-self: flex-start;
+            background: #ffe0e0;
+            color: #c00;
+            border-bottom-left-radius: 4px;
+        }
+        .chat-input-area {
+            padding: 12px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 8px;
+        }
+        .chat-input-area textarea {
+            flex: 1;
+            height: 60px;
+            resize: none;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 8px 12px;
+        }
+        .chat-input-area textarea:focus { outline: none; border-color: #007bff; }
+        .btn-send {
+            background: #007bff;
+            color: white;
+            border-radius: 8px;
+            padding: 0 18px;
+            font-size: 14px;
+            align-self: stretch;
+        }
+        .btn-send:disabled { background: #aaa; cursor: not-allowed; }
+        .btn-clear-chat {
+            background: #f0f0f0;
+            color: #555;
+            border-radius: 8px;
+            padding: 0 12px;
+            font-size: 13px;
+            align-self: stretch;
+        }
+        /* ---- persona editor ---- */
+        .persona-editor {
+            border-top: 1px solid #eee;
+            font-size: 13px;
+        }
+        .persona-toggle-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 14px;
+            cursor: pointer;
+            background: #f7f7fb;
+            user-select: none;
+            color: #555;
+            font-weight: bold;
+        }
+        .persona-toggle-bar:hover { background: #efeffa; }
+        .persona-toggle-bar .active-name {
+            font-weight: normal;
+            font-size: 12px;
+            color: #007bff;
+            max-width: 140px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .persona-body {
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: #fafafa;
+        }
+        .persona-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .persona-row select {
+            flex: 1;
+            padding: 5px 8px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        .persona-body input[type=text] {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .persona-body textarea {
+            width: 100%;
+            height: 72px;
+            font-size: 12px;
+            color: #333;
+            resize: vertical;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 6px 10px;
+        }
+        .examples-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+            font-weight: bold;
+        }
+        .example-pair {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            position: relative;
+        }
+        .example-pair textarea {
+            height: 44px;
+            font-size: 11px;
+            color: #444;
+            resize: none;
+            border-color: #e0e0e0;
+        }
+        .example-pair label { font-size: 11px; color: #888; }
+        .btn-rm-example {
+            position: absolute;
+            top: 6px; right: 8px;
+            background: none;
+            border: none;
+            color: #aaa;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+        .btn-rm-example:hover { color: #dc3545; }
+        .btn-add-example {
+            background: #e8f0fe;
+            color: #1a73e8;
+            border: 1px solid #c5d8ff;
+            border-radius: 6px;
+            padding: 3px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .persona-actions {
+            display: flex;
+            gap: 6px;
+        }
+        .btn-save-persona {
+            flex: 1;
+            background: #28a745;
+            color: white;
+            border-radius: 6px;
+            padding: 6px 0;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-save-persona:hover { background: #218838; }
+        .btn-del-persona {
+            background: #dc3545;
+            color: white;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-del-persona:hover { background: #c82333; }
+        .btn-new-persona {
+            flex: 0 0 auto;
+            background: #6f42c1;
+            color: white;
+            border-radius: 6px;
+            padding: 6px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-new-persona:hover { background: #5a32a3; }
+    </style>
+</head>
+<body>
+
+<h2>Live2Diff - Point Annotation + AI Chat</h2>
+
+<div class="controls">
+    <button id="btn-create" class="btn-mode active" onclick="setMode('create')">🔴 Create</button>
+    <button id="btn-drag" class="btn-mode" onclick="setMode('drag')">🟢 Drag</button>
+    <button class="btn-reset" onclick="resetPoints()">Reset</button>
+    <button id="btn-track" class="btn-mode" onclick="sendTrackPoints()" style="background-color:#6f42c1;color:white;">📡 CoTracker Track</button>
+    <div class="size-control">
+        <label for="point-size-slider">Point Size:</label>
+        <input type="range" id="point-size-slider" min="3" max="20" value="6" step="1">
+        <span id="size-value">6</span>px
+    </div>
+    <span id="status-msg" class="status-msg">Current Mode: Create</span>
+</div>
+<div class="hint" id="mode-hint">Tip: Click blank area to add points, adjust position in drag mode.</div>
+
+<div class="main-layout">
+    <!-- 左侧：图像标注区 -->
+    <div class="image-area">
+        <div class="container" id="img-container">
+            <img id="source-image" src="{{ image_src }}" alt="Loading image..." crossorigin="anonymous">
+            <svg id="svg-overlay"></svg>
+        </div>
+        <div class="data-panel">
+            <h3>Coordinate Data (Real-time)</h3>
+            <textarea id="data-output" readonly>Waiting for operation...</textarea>
+        </div>
+    </div>
+
+    <!-- 右侧：会话侧边栏 + AI 对话区 -->
+    <div class="chat-wrapper">
+        <!-- 会话侧边栏 -->
+        <div class="session-sidebar">
+            <div class="session-sidebar-header">💬 会话</div>
+            <button class="btn-new-session" onclick="newSession()">＋ 新对话</button>
+            <div class="session-list" id="session-list"></div>
+        </div>
+
+        <!-- AI 对话面板 -->
+        <div class="chat-panel">
+        <div class="chat-header">
+            💬 AI Chat (DeepSeek)
+            <span class="api-status" id="api-status">检查中...</span>
+        </div>
+        <!-- 人格编辑器 -->
+        <div class="persona-editor">
+            <div class="persona-toggle-bar" onclick="togglePersonaEditor()">
+                <span>🎭 人格设置</span>
+                <span class="active-name" id="active-persona-label">未启用</span>
+                <span id="persona-chevron">▼</span>
+            </div>
+            <div class="persona-body" id="persona-body" style="display:none">
+                <!-- 加载已有人格 -->
+                <div class="persona-row">
+                    <select id="persona-select" onchange="loadSelectedPersona()">
+                        <option value="" disabled style="display:none">— 新人格 —</option>
+                    </select>
+                    <button class="btn-del-persona" onclick="deletePersona()" title="删除选中人格">🗑</button>
+                </div>
+                <!-- 基本信息 -->
+                <input type="text" id="persona-name" placeholder="人格名称（如：林小樱、冷酷侦探）">
+                <textarea id="persona-description" placeholder="简短描述（可选，仅作备注）" style="height:36px"></textarea>
+                <textarea id="persona-system-prompt" placeholder="系统提示词：描述角色的性格、说话风格、背景故事、行为规则..."></textarea>
+                <!-- Few-shot 示例 -->
+                <div class="examples-header">
+                    <span>💬 Few-shot 对话示例</span>
+                    <button class="btn-add-example" onclick="addExample()">+ 添加</button>
+                </div>
+                <div id="examples-list"></div>
+                <!-- 操作 -->
+                <div class="persona-actions">
+                    <button class="btn-new-persona" onclick="newPersona()">✨ 新增</button>
+                    <button class="btn-save-persona" onclick="savePersona()">💾 保存</button>
+                </div>
+            </div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+            <div class="msg assistant">你好！我是 DeepSeek AI 助手。有什么可以帮你的吗？</div>
+        </div>
+        <div class="chat-input-area">
+            <textarea id="chat-input" placeholder="发送消息（Enter）；输入 /reset 清空上下文" onkeydown="handleChatKey(event)"></textarea>
+            <button class="btn-send" id="btn-send" onclick="sendChat()">发送</button>
+            <button class="btn-clear-chat" onclick="clearChat()">清空</button>
+        </div>
+        </div><!-- end .chat-panel -->
+    </div><!-- end .chat-wrapper -->
+</div><!-- end .main-layout -->
+
+<script>
+    // ================================================================
+    // 图像标注逻辑（与原版一致）
+    // ================================================================
+    let pointsT0 = [], pointsT1 = [];
+    let currentMode = 'create';
+    let selectedIndex = -1;
+    let isDragging = false;
+    let baseRadius = 6;
+    let selectedRadius = 10;
+    let currentImgPath = '{{ image_src }}';
+    let isFetchingImage = false;
+
+    const svg = document.getElementById('svg-overlay');
+    const img = document.getElementById('source-image');
+    const statusMsg = document.getElementById('status-msg');
+    const modeHint = document.getElementById('mode-hint');
+    const dataOutput = document.getElementById('data-output');
+    const sizeSlider = document.getElementById('point-size-slider');
+    const sizeValueDisplay = document.getElementById('size-value');
+
+    let lastSendTime = 0;
+    const SEND_INTERVAL = 100;
+    let lastBestFrameTime = 0;
+    const BEST_FRAME_INTERVAL = 50;   // 拖动时每 50ms 请求一次最优帧
+
+    function sendPointsThrottled(triggerImage) {
+        const now = Date.now();
+        if (now - lastSendTime > SEND_INTERVAL) {
+            lastSendTime = now;
+            sendPointsToBackend(triggerImage);
+        }
+    }
+
+    function fetchBestFrameThrottled() {
+        const now = Date.now();
+        if (now - lastBestFrameTime < BEST_FRAME_INTERVAL) return;
+        lastBestFrameTime = now;
+        fetchBestFrame();
+    }
+
+    async function fetchBestFrame() {
+        if (isFetchingImage) return;
+        isFetchingImage = true;
+        try {
+            const t1 = pointsT1.map(p => [p.x, p.y]);
+            const response = await fetch('/api/best-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ t1 })
+            });
+            const result = await response.json();
+            if (result.image_src && result.image_src !== currentImgPath) {
+                currentImgPath = result.image_src;
+                img.src = result.image_src;
+                statusMsg.textContent = `Drag | ${result.image_src.split('/').pop()}`;
+            }
+            if (result.t0_points && result.t0_points.length === pointsT0.length) {
+                pointsT0 = result.t0_points.map(p => ({ x: p[0], y: p[1] }));
+                renderPoints();
+            }
+        } catch (e) {
+            console.error('fetchBestFrame failed:', e);
+        } finally {
+            isFetchingImage = false;
+        }
+    }
+
+    sizeSlider.addEventListener('input', function(e) {
+        baseRadius = parseInt(e.target.value);
+        selectedRadius = Math.max(baseRadius + 2, Math.floor(baseRadius * 1.6));
+        sizeValueDisplay.textContent = baseRadius;
+        if (pointsT0.length > 0) renderPoints();
+    });
+
+    img.onload = function() {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+        svg.style.width = '100%';
+        svg.style.height = '100%';
+        baseRadius = parseInt(sizeSlider.value);
+        selectedRadius = Math.max(baseRadius + 2, Math.floor(baseRadius * 1.6));
+        updateDataText();
+    };
+
+    function setMode(mode) {
+        currentMode = mode;
+        selectedIndex = -1;
+        isDragging = false;
+        renderPoints();
+        updateDataText();
+        document.getElementById('btn-create').classList.toggle('active', mode === 'create');
+        document.getElementById('btn-drag').classList.toggle('active', mode === 'drag');
+        if (mode === 'create') {
+            statusMsg.textContent = "Current Mode: Create";
+            modeHint.textContent = "Tip: Click anywhere on the image to add a new point pair.";
+            svg.style.cursor = "crosshair";
+        } else {
+            statusMsg.textContent = "Current Mode: Drag";
+            modeHint.textContent = "Tip: 1.Click green point to select -> 2.Move mouse to adjust -> 3.Click again to confirm.";
+            svg.style.cursor = "default";
+        }
+    }
+
+    function getSVGPoint(evt) {
+        const pt = svg.createSVGPoint();
+        pt.x = evt.clientX; pt.y = evt.clientY;
+        const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+        return { x: svgP.x, y: svgP.y };
+    }
+
+    svg.addEventListener('mousedown', function(evt) {
+        if (evt.button !== 0) return;
+        const { x, y } = getSVGPoint(evt);
+        if (currentMode === 'create') {
+            pointsT0.push({x, y});
+            pointsT1.push({x, y});
+            renderPoints();
+            updateDataText();
+        } else if (currentMode === 'drag') {
+            if (selectedIndex !== -1) {
+                selectedIndex = -1;
+                isDragging = false;
+                statusMsg.textContent = "Position confirmed";
+                renderPoints();
+                updateDataText();
+                fetchBestFrame();   // 确认位置时立即取最优帧
+            } else {
+                const threshold = Math.max(10, baseRadius * 2.5);
+                let found = -1;
+                for (let i = pointsT1.length - 1; i >= 0; i--) {
+                    const p = pointsT1[i];
+                    if (Math.sqrt((x - p.x)**2 + (y - p.y)**2) < threshold) { found = i; break; }
+                }
+                if (found !== -1) {
+                    selectedIndex = found;
+                    statusMsg.textContent = `Selected Point #${found}, move mouse to adjust`;
+                    renderPoints();
+                } else {
+                    selectedIndex = -1;
+                    renderPoints();
+                    statusMsg.textContent = "No point selected";
+                }
+            }
+        }
+    });
+
+    svg.addEventListener('mousemove', function(evt) {
+        if (currentMode !== 'drag' || selectedIndex === -1) return;
+        const { x, y } = getSVGPoint(evt);
+        pointsT1[selectedIndex] = { x, y };
+        updateDragVisualization(selectedIndex, x, y);
+        updateDataText();
+        fetchBestFrameThrottled();   // 拖动时直接查最优帧，不走队列
+        if (!isDragging) {
+            isDragging = true;
+        }
+    });
+
+    function renderPoints() {
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        pointsT0.forEach((p0, i) => {
+            const p1 = pointsT1[i];
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", p0.x); line.setAttribute("y1", p0.y);
+            line.setAttribute("x2", p1.x); line.setAttribute("y2", p1.y);
+            line.setAttribute("class", "trajectory-line");
+            if (i === selectedIndex) {
+                line.setAttribute("stroke", "#ffaa00");
+                line.setAttribute("stroke-width", "3");
+                line.setAttribute("stroke-dasharray", "0");
+                line.setAttribute("opacity", "1");
+            }
+            line.setAttribute("id", `line-${i}`);
+            svg.appendChild(line);
+        });
+        pointsT0.forEach(p => {
+            const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+            c.setAttribute("r", baseRadius); c.setAttribute("class", "point-t0");
+            svg.appendChild(c);
+        });
+        pointsT1.forEach((p, i) => {
+            const isSelected = (i === selectedIndex);
+            const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+            c.setAttribute("r", isSelected ? selectedRadius : baseRadius);
+            c.setAttribute("class", isSelected ? "point-t1 selected" : "point-t1");
+            c.style.pointerEvents = "none";
+            svg.appendChild(c);
+        });
+    }
+
+    function updateDragVisualization(index, newX, newY) {
+        const line = document.getElementById(`line-${index}`);
+        if (line) { line.setAttribute("x2", newX); line.setAttribute("y2", newY); }
+        const idx = pointsT0.length * 2 + index;
+        const pointNode = svg.children[idx];
+        if (pointNode) { pointNode.setAttribute("cx", newX); pointNode.setAttribute("cy", newY); }
+    }
+
+    function updateDataText() {
+        if (pointsT0.length === 0) { dataOutput.value = "No data"; return; }
+        let text = `# Total Points: ${pointsT0.length}\n\n`;
+        pointsT0.forEach((p, i) => {
+            const p1 = pointsT1[i];
+            const mark = (i === selectedIndex) ? " <-- [Editing]" : "";
+            text += `Point ${i}: [${p.x.toFixed(1)}, ${p.y.toFixed(1)}] -> [${p1.x.toFixed(1)}, ${p1.y.toFixed(1)}]${mark}\n`;
+        });
+        dataOutput.value = text;
+    }
+
+    function resetPoints() {
+        if (pointsT0.length === 0) return;
+        if (confirm("Are you sure you want to delete all points?")) {
+            pointsT0 = []; pointsT1 = [];
+            selectedIndex = -1; isDragging = false;
+            renderPoints(); updateDataText();
+            statusMsg.textContent = "Reset completed";
+            sendPointsToBackend(false);
+        }
+    }
+
+    async function sendPointsToBackend(triggerImage) {
+        try {
+            const t0 = pointsT0.map(p => [p.x.toFixed(1), p.y.toFixed(1)]);
+            const t1 = pointsT1.map(p => [p.x.toFixed(1), p.y.toFixed(1)]);
+            await fetch('/api/points', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ t0, t1, trigger_image: triggerImage })
+            });
+        } catch (error) {
+            console.error("Failed to send data:", error);
+        }
+    }
+
+    async function sendTrackPoints() {
+        if (pointsT0.length === 0) { alert("Please create at least one point first!"); return; }
+        const trackPoints = pointsT0.map(p => [parseFloat(p.x.toFixed(1)), parseFloat(p.y.toFixed(1))]);
+        try {
+            const response = await fetch('/api/cotracker-track', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ t0_points: trackPoints })
+            });
+            const result = await response.json();
+            statusMsg.textContent = result.status === "success"
+                ? `✅ Sent ${trackPoints.length} tracking points`
+                : "❌ Failed to send tracking points";
+        } catch (error) {
+            statusMsg.textContent = "❌ Network error";
+            console.error(error);
+        }
+    }
+
+    async function fetchCurrentImage() {
+        if (isFetchingImage) return;   // 上一次还没完成，跳过本次
+        isFetchingImage = true;
+        try {
+            const response = await fetch('/api/current-image');
+            const result = await response.json();
+            if (result.image_src && result.image_src !== currentImgPath) {
+                currentImgPath = result.image_src;
+                img.src = result.image_src;
+                statusMsg.textContent = `Drag | 切换帧: ${result.image_src}`;
+                if (result.t0_points && result.t0_points.length > 0) {
+                    pointsT0 = result.t0_points.map(p => ({x: p[0], y: p[1]}));
+                    if (pointsT1.length === 0) pointsT1 = [...pointsT0];
+                    renderPoints(); updateDataText();
+                }
+            }
+        } catch (error) {
+            console.error("Failed to fetch latest image:", error);
+        } finally {
+            isFetchingImage = false;
+        }
+    }
+
+
+    // ================================================================
+    // 人格管理逻辑
+    // ================================================================
+    let currentPersona = { name: '', description: '', system_prompt: '', begin_dialogs: [] };
+    let personaOpen = false;
+
+    function togglePersonaEditor() {
+        personaOpen = !personaOpen;
+        document.getElementById('persona-body').style.display = personaOpen ? 'flex' : 'none';
+        document.getElementById('persona-chevron').textContent = personaOpen ? '▲' : '▼';
+    }
+
+    async function fetchPersonaList() {
+        try {
+            const res = await fetch('/api/personas');
+            const data = await res.json();
+            const sel = document.getElementById('persona-select');
+            const cur = sel.value;
+            sel.innerHTML = '<option value="" disabled style="display:none">— 新人格 —</option>';
+            for (const name of Object.keys(data)) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                if (name === cur) opt.selected = true;
+                sel.appendChild(opt);
+            }
+            // 若当前无有效选中（如刚新增），回退到 default
+            if (!sel.value && data['default']) sel.value = 'default';
+            return data;
+        } catch(e) { return {}; }
+    }
+
+    function loadSelectedPersona() {
+        const name = document.getElementById('persona-select').value;
+        if (!name) return;
+        fetch('/api/personas').then(r => r.json()).then(data => {
+            const p = data[name];
+            if (!p) return;
+            applyPersonaToForm(p);
+            activatePersona(p);
+        });
+    }
+
+    function applyPersonaToForm(p) {
+        const nameInput = document.getElementById('persona-name');
+        nameInput.value = p.name || '';
+        const isDefault = p.name === 'default';
+        nameInput.readOnly = isDefault;
+        nameInput.style.background = isDefault ? '#f0f0f0' : '';
+        nameInput.title = isDefault ? 'default 人格名称不可修改' : '';
+        document.getElementById('persona-description').value = p.description || '';
+        document.getElementById('persona-system-prompt').value = p.system_prompt || '';
+        const list = document.getElementById('examples-list');
+        list.innerHTML = '';
+        for (const ex of (p.begin_dialogs || [])) {
+            appendExampleRow(ex.user || '', ex.assistant || '');
+        }
+    }
+
+    function activatePersona(p) {
+        currentPersona = { ...p };
+        const label = document.getElementById('active-persona-label');
+        label.textContent = p.name ? `🟢 ${p.name}` : '未启用';
+        const header = document.querySelector('.chat-header');
+        header.title = p.system_prompt ? `当前人格：${p.name}\n${p.system_prompt.slice(0, 80)}...` : '';
+    }
+
+    function appendExampleRow(userText = '', assistantText = '') {
+        const list = document.getElementById('examples-list');
+        const idx = list.children.length;
+        const div = document.createElement('div');
+        div.className = 'example-pair';
+        div.innerHTML = `
+            <button class="btn-rm-example" onclick="this.parentElement.remove()" title="删除此示例">×</button>
+            <label>用户</label>
+            <textarea placeholder="用户说..." data-role="user">${userText}</textarea>
+            <label>角色回复</label>
+            <textarea placeholder="角色回答..." data-role="assistant">${assistantText}</textarea>
+        `;
+        list.appendChild(div);
+    }
+
+    function addExample() { appendExampleRow(); }
+
+    async function savePersona() {
+        const name = document.getElementById('persona-name').value.trim();
+        if (!name) { alert('请填写人格名称'); return; }
+        const selectedName = document.getElementById('persona-select').value;
+        if (name === 'default' && selectedName !== 'default') {
+            alert('"default" 是保留名称，不可使用'); return;
+        }
+        const begin_dialogs = [];
+        document.querySelectorAll('#examples-list .example-pair').forEach(pair => {
+            const u = pair.querySelector('[data-role=user]').value.trim();
+            const a = pair.querySelector('[data-role=assistant]').value.trim();
+            if (u || a) begin_dialogs.push({ user: u, assistant: a });
+        });
+        const p = {
+            name,
+            description: document.getElementById('persona-description').value.trim(),
+            system_prompt: document.getElementById('persona-system-prompt').value.trim(),
+            begin_dialogs,
+        };
+        await fetch('/api/personas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(p)
+        });
+        await fetchPersonaList();
+        document.getElementById('persona-select').value = name;
+        activatePersona(p);
+        alert(`✅ 人格「${name}」已保存并启用`);
+    }
+
+    async function deletePersona() {
+        const name = document.getElementById('persona-select').value;
+        if (!name) { alert('请先选择要删除的人格'); return; }
+        if (name === 'default') { alert('default 人格不可删除'); return; }
+        if (!confirm(`确认删除人格「${name}」？`)) return;
+        await fetch(`/api/personas/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (currentPersona.name === name) activatePersona({ name: '', description: '', system_prompt: '', begin_dialogs: [] });
+        await fetchPersonaList();
+    }
+
+    function newPersona() {
+        document.getElementById('persona-select').value = '';
+        const nameInput = document.getElementById('persona-name');
+        nameInput.value = '';
+        nameInput.readOnly = false;
+        nameInput.style.background = '';
+        nameInput.title = '';
+        document.getElementById('persona-description').value = '';
+        document.getElementById('persona-system-prompt').value = '';
+        document.getElementById('examples-list').innerHTML = '';
+    }
+
+    // 初始化：加载人格列表并激活 default
+    fetchPersonaList().then(data => {
+        const p = data['default'];
+        if (p) {
+            applyPersonaToForm(p);
+            activatePersona(p);
+            document.getElementById('persona-select').value = 'default';
+        }
+    });
+
+    // ================================================================
+    // 会话（Session）管理
+    // ================================================================
+    let chatHistory = [];   // 由 Session 模块统一维护
+    const SESSION_STORE_KEY = 'live2diff_sessions';
+    let sessions = [];
+    let currentSessionId = null;
+
+    function genSessionId() { return 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
+
+    function persistSessions() {
+        localStorage.setItem(SESSION_STORE_KEY, JSON.stringify(sessions));
+    }
+
+    function saveCurrentSession() {
+        if (!currentSessionId) return;
+        const s = sessions.find(x => x.id === currentSessionId);
+        if (!s) return;
+        s.messages = [...chatHistory];
+        s.personaName = currentPersona.name;
+        s.updatedAt = Date.now();
+        persistSessions();
+    }
+
+    function newSession() {
+        saveCurrentSession();
+        const id = genSessionId();
+        const s = { id, name: `对话 ${sessions.length + 1}`, createdAt: Date.now(), updatedAt: Date.now(), personaName: currentPersona.name, messages: [] };
+        sessions.unshift(s);
+        currentSessionId = id;
+        chatHistory = [];
+        persistSessions();
+        renderSessionList();
+        resetChatDisplay();
+    }
+
+    function switchSession(id) {
+        if (id === currentSessionId) return;
+        saveCurrentSession();
+        const s = sessions.find(x => x.id === id);
+        if (!s) return;
+        currentSessionId = id;
+        chatHistory = [...s.messages];
+        renderSessionList();
+        replayChatDisplay();
+    }
+
+    function deleteSession(id, e) {
+        e.stopPropagation();
+        if (sessions.length <= 1) { alert('至少保留一个会话'); return; }
+        if (!confirm('删除此会话？')) return;
+        sessions = sessions.filter(x => x.id !== id);
+        persistSessions();
+        if (currentSessionId === id) {
+            currentSessionId = sessions[0].id;
+            chatHistory = [...sessions[0].messages];
+            replayChatDisplay();
+        }
+        renderSessionList();
+    }
+
+    function renameSession(id, e) {
+        e.stopPropagation();
+        const s = sessions.find(x => x.id === id);
+        if (!s) return;
+        const name = prompt('重命名', s.name);
+        if (name && name.trim()) { s.name = name.trim(); persistSessions(); renderSessionList(); }
+    }
+
+    function renderSessionList() {
+        const list = document.getElementById('session-list');
+        list.innerHTML = '';
+        sessions.forEach(s => {
+            const div = document.createElement('div');
+            div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+            div.onclick = () => switchSession(s.id);
+            div.innerHTML = `<span class="session-name" title="${s.name}">${s.name}</span><button class="btn-del-session" title="删除">×</button>`;
+            div.querySelector('.btn-del-session').onclick = (e) => deleteSession(s.id, e);
+            div.querySelector('.session-name').ondblclick = (e) => { e.stopPropagation(); renameSession(s.id, e); };
+            list.appendChild(div);
+        });
+    }
+
+    function resetChatDisplay() {
+        const name = currentPersona.name || 'AI';
+        document.getElementById('chat-messages').innerHTML =
+            `<div class="msg assistant">新对话开始，我是 ${name}，有什么可以帮你的吗？</div>`;
+    }
+
+    function replayChatDisplay() {
+        const container = document.getElementById('chat-messages');
+        container.innerHTML = '';
+        if (chatHistory.length === 0) { resetChatDisplay(); return; }
+        chatHistory.forEach(m => {
+            const d = document.createElement('div');
+            d.className = `msg ${m.role}`;
+            d.textContent = m.content;
+            container.appendChild(d);
+        });
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // 启动：从 localStorage 恢复或新建默认会话
+    (function initSessions() {
+        const saved = localStorage.getItem(SESSION_STORE_KEY);
+        if (saved) {
+            try { sessions = JSON.parse(saved); } catch(e) { sessions = []; }
+        }
+        if (sessions.length === 0) {
+            const id = genSessionId();
+            sessions = [{ id, name: '对话 1', createdAt: Date.now(), updatedAt: Date.now(), personaName: '', messages: [] }];
+            persistSessions();
+        }
+        currentSessionId = sessions[0].id;
+        chatHistory = [...sessions[0].messages];
+        renderSessionList();
+        replayChatDisplay();
+    })();
+
+    // ================================================================
+    // AI 对话逻辑
+    // ================================================================
+    // chatHistory 由 Session 模块管理，此处不重复声明
+    let isStreaming = false;
+
+    (async function checkApiStatus() {
+        try {
+            const res = await fetch('/api/chat/status');
+            const data = await res.json();
+            const el = document.getElementById('api-status');
+            if (data.configured) {
+                el.textContent = '✅ API 已配置';
+                el.style.color = '#90ee90';
+            } else {
+                el.textContent = '⚠️ 未设置 DEEPSEEK_API_KEY';
+                el.style.color = '#ffcc00';
+            }
+        } catch(e) {
+            document.getElementById('api-status').textContent = '❌ 无法连接';
+        }
+    })();
+
+    function handleChatKey(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChat();
+        }
+    }
+
+    function appendMessage(role, content, streaming = false) {
+        const container = document.getElementById('chat-messages');
+        const div = document.createElement('div');
+        div.className = `msg ${role}${streaming ? ' streaming' : ''}`;
+        div.textContent = content;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+        return div;
+    }
+
+    function clearChat() {
+        chatHistory = [];
+        saveCurrentSession();
+        resetChatDisplay();
+    }
+
+    function buildMessages() {
+        const msgs = [];
+        // 1. 人格系统提示词
+        if (currentPersona.system_prompt) {
+            msgs.push({ role: 'system', content: currentPersona.system_prompt });
+        }
+        // 2. Few-shot 示例（begin_dialogs）
+        for (const ex of (currentPersona.begin_dialogs || [])) {
+            if (ex.user)      msgs.push({ role: 'user',      content: ex.user });
+            if (ex.assistant) msgs.push({ role: 'assistant', content: ex.assistant });
+        }
+        // 3. 真实对话历史
+        msgs.push(...chatHistory);
+        return msgs;
+    }
+
+    async function sendChat() {
+        if (isStreaming) return;
+        const input = document.getElementById('chat-input');
+        const userText = input.value.trim();
+        if (!userText) return;
+
+        // /reset 指令：清空当前会话上下文
+        if (userText === '/reset') {
+            input.value = '';
+            chatHistory = [];
+            saveCurrentSession();
+            resetChatDisplay();
+            appendMessage('assistant', '✅ 上下文已清空，继续聊吧！');
+            return;
+        }
+
+        input.value = '';
+        appendMessage('user', userText);
+        chatHistory.push({ role: 'user', content: userText });
+
+        const messages = buildMessages();
+
+        const btnSend = document.getElementById('btn-send');
+        btnSend.disabled = true;
+        isStreaming = true;
+
+        const assistantDiv = appendMessage('assistant', '', true);
+        let fullContent = '';
+
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages })
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                assistantDiv.className = 'msg error';
+                assistantDiv.textContent = '❌ ' + (err.error || '请求失败');
+                chatHistory.pop();
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const payload = line.slice(6).trim();
+                    if (payload === '[DONE]') break;
+                    try {
+                        const obj = JSON.parse(payload);
+                        if (obj.error) {
+                            assistantDiv.className = 'msg error';
+                            assistantDiv.textContent = '❌ ' + obj.error;
+                            chatHistory.pop();
+                            return;
+                        }
+                        if (obj.delta) {
+                            fullContent += obj.delta;
+                            assistantDiv.textContent = fullContent;
+                            document.getElementById('chat-messages').scrollTop =
+                                document.getElementById('chat-messages').scrollHeight;
+                        }
+                    } catch(e) { /* 忽略解析错误 */ }
+                }
+            }
+
+            assistantDiv.classList.remove('streaming');
+            if (fullContent) {
+                chatHistory.push({ role: 'assistant', content: fullContent });
+                saveCurrentSession();
+                renderSessionList();
+            }
+        } catch (err) {
+            assistantDiv.className = 'msg error';
+            assistantDiv.textContent = '❌ 网络错误：' + err.message;
+            chatHistory.pop();
+        } finally {
+            isStreaming = false;
+            btnSend.disabled = false;
+        }
+    }
+</script>
+</body>
+</html>
