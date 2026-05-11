@@ -590,19 +590,12 @@ class MainWindow(QMainWindow):
         if len(paths) == 1:
             # 只有一帧：直接入队
             with self.queue_lock:
-                # if len(self.image_path_queue) < QUEUE_LEN:
                 self.image_path_queue.append(paths[0])
             return 1
 
         # ② 逐段提交插帧任务（提交前检查队列长度）
         submitted = 0
         for i in range(len(paths) - 1):
-            # 提交前：若队列已满，后续任务不再提交
-            # with self.queue_lock:
-            #     queue_full = len(self.image_path_queue) >= QUEUE_LEN
-            # if queue_full:
-            #     print(f"[RIFE] 队列已满({QUEUE_LEN})，跳过剩余 {len(paths) - 1 - i} 个任务")
-            #     break
 
             prev = paths[i]
             nxt = paths[i + 1]
@@ -662,10 +655,6 @@ class MainWindow(QMainWindow):
                 self._adjust_image_timer_rate()
                 return
             new_path = self.image_path_queue.popleft()
-            # 队列消费到空时重置 _queue_tail，让 get_node_path 回退到 current_image_path
-            # if not self.image_path_queue:
-            #     self._queue_tail = None
-
         if new_path == self.current_image_path:
             return
 
