@@ -57,7 +57,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 FPS = 60
 DEPTH_LIMIT = 10
 QUEUE_LEN = 10
-MAX_QUEUE_ADD = 10
+MAX_QUEUE_ADD = QUEUE_LEN
 MOTION_CHECK_INTERVAL = 80  # ms
 
 RIFE_EXP   = 2          # 插帧倍数，2^2=4 段，插 3 帧
@@ -326,7 +326,7 @@ class MainWindow(QMainWindow):
                 "get_track_points":   lambda: self._current_t0,
                 "get_image_center":   lambda: self._get_img_center(),
                 "is_queue_empty":     lambda: self._is_queue_empty(),
-                "add_paths_to_queue": lambda paths: self._add_paths_to_queue(paths),#开启补帧需要替换函数为 _add_paths_with_rife(paths),
+                "add_paths_to_queue": lambda paths: self._add_paths_to_queue(paths),# _add_paths_to_queue 开启补帧需要替换函数为 _add_paths_with_rife(paths),
                 "on_status":          lambda text: self.status_label.setText(text),
                 "on_complete":        lambda: self._on_anim_complete(),
             }
@@ -511,7 +511,7 @@ class MainWindow(QMainWindow):
 
     def _adjust_image_timer_rate(self):
         if self.anim.is_active:
-            self.image_timer.start(1000 // FPS)
+            self.image_timer.start(3000 // FPS)
         else:
             self.image_timer.start(6000 // FPS)
 
@@ -550,9 +550,9 @@ class MainWindow(QMainWindow):
     # ── 原始直接入队（不插帧，保留备用）─────────────────────────────
     def _add_paths_to_queue(self, paths):
         added = 0
-        if len(self.image_path_queue)>=QUEUE_LEN :
+        if len(self.image_path_queue)>=QUEUE_LEN or len(paths)<=0:
             return 1
-        paths=paths[:MAX_QUEUE_ADD]
+        paths=paths[:100]
         self._queue_tail = paths[-1]
         with self.queue_lock:
             for n in paths:
