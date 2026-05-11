@@ -590,8 +590,8 @@ class MainWindow(QMainWindow):
         if len(paths) == 1:
             # 只有一帧：直接入队
             with self.queue_lock:
-                if len(self.image_path_queue) < QUEUE_LEN:
-                    self.image_path_queue.append(paths[0])
+                # if len(self.image_path_queue) < QUEUE_LEN:
+                self.image_path_queue.append(paths[0])
             return 1
 
         # ② 逐段提交插帧任务（提交前检查队列长度）
