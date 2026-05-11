@@ -26,7 +26,8 @@ class AnimationController:
 
         self._idle_enabled = False
         self._idle_waiting = False
-        # self._idle_count = 0
+        self._idle_cooldown = 0
+        self._idle_cooldown_ticks = 20   # ~1.6 s pause between idle steps
 
     @property
     def is_active(self) -> bool:
@@ -39,7 +40,36 @@ class AnimationController:
     def set_idle_enabled(self, enabled: bool):
         self._idle_enabled = enabled
         self._idle_waiting = False
+        self._idle_cooldown = 0
         print(f"[待机] 待机动画 {'开启' if enabled else '关闭'}")
+
+    def start_by_path(self, paths: list, describe: str = ""):
+        """
+        Semantic-navigation entry point: accepts a pre-computed list of node
+        paths (from SemanticNavigator.navigate_to) and drives them directly
+        into the queue, then triggers return-to-center when done.
+        """
+        if self._is_active or not paths:
+            return
+
+        self._is_active = True
+        self._motion_sequence = []   # no pixel-offset steps
+        self._motion_step = 0
+        self._origin_node = self._callbacks["get_node_path"]()
+        self._returning_to_center = False
+        self._waiting_for_queue = False
+        self._describe = describe
+        self._motion_target_node = paths[-1]
+        self._idle_waiting = False
+        self._initial_img_center = self._callbacks["get_image_center"]()
+
+        print(f"[语义导航] start_by_path: origin={self._origin_node}, "
+              f"target={self._motion_target_node}, steps={len(paths)}")
+        self._callbacks["on_status"](f"执行动画... {describe}")
+
+        added = self._callbacks["add_paths_to_queue"](paths)
+        print(f"[语义导航] 已入队 {added} 个节点")
+        self._waiting_for_queue = True
 
     def start(self, offsets, describe=""):
         if self._is_active:
@@ -116,7 +146,10 @@ class AnimationController:
             and not self._is_active
             and self._callbacks["is_queue_empty"]()
         ):
-            self._do_idle_step()
+            if self._idle_cooldown > 0:
+                self._idle_cooldown -= 1
+            else:
+                self._do_idle_step()
 
     def navigate_offset(self, dx, dy):
         track = self._callbacks["get_track_points"]()
@@ -332,15 +365,9 @@ class AnimationController:
         if not track:
             return
 
-        # if self._idle_count != 3:
-        #     self._idle_count += 1
-        #     return
-        # else:
-        #     self._idle_count = 0
-
-
-        dx = random.uniform(-5, 5)
+        dx = random.uniform(-20, 20)
         dy = random.uniform(-20, 20)
+
         t1_target = [(x + dx, y + dy) for x, y in track]
 
         start_node = self._callbacks["get_node_path"]()
@@ -367,8 +394,17 @@ class AnimationController:
         except nx.NetworkXNoPath:
             return
 
-        self._callbacks["add_paths_to_queue"](shortest[1:])
+        # Arm the state machine so tick() handles arrival-check + return-to-center.
+        # Without these, _start_return_to_center would find _origin_node=None and
+        # call _finish_animation immediately, skipping the return journey entirely.
+        self._is_active = True
+        self._origin_node = start_node
+        self._motion_sequence = []
+        self._motion_step = 0
+        self._motion_target_node = target_node
+        self._returning_to_center = False
+        self._waiting_for_queue = True
+        self._describe = "idle"
 
-        self._start_return_to_center()
-
-        print(f"[待机] 路径长度={len(shortest)} → {target_node}")
+        added = self._callbacks["add_paths_to_queue"](shortest[1:])
+        print(f"[待机] 路径长度={len(shortest)} → {target_node}, 入队 {added} 个节点")

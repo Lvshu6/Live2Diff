@@ -400,6 +400,36 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.26); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(168,85,247,0.44); }
+
+        /* ── Agent mode extras ── */
+        .btn-agent-mode {
+            background: rgba(240,233,255,0.85); color: #555;
+            border: 1.5px solid #d8b4fe; border-radius: 6px;
+            font-weight: bold; font-size: 11px; padding: 4px 10px; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-agent-mode.active {
+            background: linear-gradient(90deg,#0ea5e9,#6366f1); color: white; border-color: transparent;
+        }
+        .msg.tool-call {
+            align-self: flex-start; max-width: 84%;
+            background: #f0f9ff; border: 1.5px dashed #38bdf8;
+            border-radius: 10px; padding: 6px 12px;
+            font-size: 11px; color: #0369a1; margin-left: 20px;
+        }
+        .msg.tool-result {
+            align-self: flex-start; max-width: 84%;
+            background: #f0fdf4; border: 1px solid #86efac;
+            border-radius: 10px; padding: 6px 12px;
+            font-size: 11px; color: #166534; margin-left: 20px;
+            white-space: pre-wrap; word-break: break-word;
+        }
+        .motion-badge {
+            display: inline-block; font-size: 9px; font-weight: bold;
+            background: linear-gradient(90deg,#e879f9,#a855f7);
+            color: white; border-radius: 10px; padding: 1px 7px;
+            margin-left: 6px; vertical-align: middle;
+        }
     </style>
 </head>
 <body>
@@ -447,7 +477,7 @@
     <!-- ══ CENTER: controls + image | floating bubbles ══ -->
     <div class="center-zone">
         <div class="controls">
-            <button id="btn-create" class="btn-mode active" onclick="setMode('create')">🔴 Create</button>
+            <button id="btn-create" class="btn-mode" onclick="setMode('create')">🔴 Create</button>
             <button id="btn-drag"   class="btn-mode"        onclick="setMode('drag')">🟢 Drag</button>
             <button class="btn-reset" onclick="resetPoints()">Reset</button>
             <button id="btn-track" onclick="sendTrackPoints()">📡 CoTracker</button>
@@ -456,8 +486,8 @@
                 <input type="range" id="point-size-slider" min="3" max="20" value="6" step="1">
                 <span id="size-value">6</span>px
             </div>
-            <span id="status-msg" class="status-msg">Create Mode</span>
-            <span id="mode-hint">点击图像添加控制点</span>
+            <span id="status-msg" class="status-msg">待机中</span>
+            <span id="mode-hint">点击 Create 进入标注模式</span>
         </div>
 
         <div class="character-chat-area">
@@ -513,13 +543,39 @@ function togglePersonaSidebar() {
 // Image annotation
 // ================================================================
 let pointsT0 = [], pointsT1 = [];
-let currentMode = 'create';
+let currentMode = 'view';
+let inAnnotateMode = false;
+let imagePollTimer = null;
 let selectedIndex = -1;
 let isDragging = false;
 let baseRadius = 6;
 let selectedRadius = 10;
 let currentImgPath = '{{ image_src }}';
 let isFetchingImage = false;
+
+function startImagePoll() {
+    if (imagePollTimer) return;
+    imagePollTimer = setInterval(fetchCurrentImage, 50);
+}
+function stopImagePoll() {
+    if (imagePollTimer) { clearInterval(imagePollTimer); imagePollTimer = null; }
+}
+
+async function enterAnnotateMode() {
+    if (inAnnotateMode) return;
+    inAnnotateMode = true;
+    try {
+        const res = await fetch('/api/control/mode', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'annotate' })
+        });
+        const result = await res.json();
+        if (result.image_src) {
+            currentImgPath = result.image_src;
+            img.src = result.image_src;
+        }
+    } catch(e) { console.error('enterAnnotateMode failed:', e); }
+}
 
 const svg = document.getElementById('svg-overlay');
 const img = document.getElementById('source-image');
@@ -533,6 +589,7 @@ let lastSendTime = 0;
 const SEND_INTERVAL = 100;
 let lastBestFrameTime = 0;
 const BEST_FRAME_INTERVAL = 50;
+let isFetchingBestFrame = false;   // 独立于 fetchCurrentImage 的锁
 
 function sendPointsThrottled(triggerImage) {
     const now = Date.now();
@@ -544,13 +601,13 @@ function fetchBestFrameThrottled() {
     lastBestFrameTime = now; fetchBestFrame();
 }
 async function fetchBestFrame() {
-    if (isFetchingImage) return;
-    isFetchingImage = true;
+    if (isFetchingBestFrame) return;
+    isFetchingBestFrame = true;
     try {
         const t1 = pointsT1.map(p => [p.x, p.y]);
         const res = await fetch('/api/best-frame', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ t1 })
+            body: JSON.stringify({ t1, current_image_path: currentImgPath })
         });
         const result = await res.json();
         if (result.image_src && result.image_src !== currentImgPath) {
@@ -558,12 +615,22 @@ async function fetchBestFrame() {
             img.src = result.image_src;
             statusMsg.textContent = `Drag | ${result.image_src.split('/').pop()}`;
         }
-        if (result.t0_points && result.t0_points.length === pointsT0.length) {
-            pointsT0 = result.t0_points.map(p => ({ x: p[0], y: p[1] }));
+        // Active drag: T0 updates to new frame's keypoints;
+        // non-dragged points also shift T1; dragged point's T1 stays under the mouse.
+        if (result.t0_points && result.t0_points.length === pointsT0.length &&
+            pointsT0.length > 0) {
+            for (let i = 0; i < pointsT0.length; i++) {
+                const nx = result.t0_points[i][0], ny = result.t0_points[i][1];
+                const dx = nx - pointsT0[i].x,    dy = ny - pointsT0[i].y;
+                pointsT0[i] = { x: nx, y: ny };
+                if (i !== selectedIndex) {
+                    pointsT1[i] = { x: pointsT1[i].x + dx, y: pointsT1[i].y + dy };
+                }
+            }
             renderPoints();
         }
     } catch(e) { console.error('fetchBestFrame failed:', e); }
-    finally { isFetchingImage = false; }
+    finally { isFetchingBestFrame = false; }
 }
 
 sizeSlider.addEventListener('input', function(e) {
@@ -583,6 +650,14 @@ img.onload = function() {
 };
 
 function setMode(mode) {
+    if (!inAnnotateMode) {
+        enterAnnotateMode().then(() => _applyMode(mode));
+        return;
+    }
+    _applyMode(mode);
+}
+
+function _applyMode(mode) {
     currentMode = mode; selectedIndex = -1; isDragging = false;
     renderPoints(); updateDataText();
     document.getElementById('btn-create').classList.toggle('active', mode === 'create');
@@ -606,6 +681,7 @@ function getSVGPoint(evt) {
 
 svg.addEventListener('mousedown', function(evt) {
     if (evt.button !== 0) return;
+    if (currentMode === 'view') return;
     const { x, y } = getSVGPoint(evt);
     if (currentMode === 'create') {
         pointsT0.push({x, y}); pointsT1.push({x, y});
@@ -615,6 +691,8 @@ svg.addEventListener('mousedown', function(evt) {
             selectedIndex = -1; isDragging = false;
             statusMsg.textContent = "位置已确认";
             renderPoints(); updateDataText(); fetchBestFrame();
+            fetch('/api/control/clear-queue', { method: 'POST' }).catch(() => {});
+            startImagePoll();   // 拖拽结束，恢复 LLM 动画轮询
         } else {
             const thr = Math.max(10, baseRadius * 2.5);
             let found = -1;
@@ -626,6 +704,7 @@ svg.addEventListener('mousedown', function(evt) {
                 selectedIndex = found;
                 statusMsg.textContent = `已选中点 #${found}`;
                 renderPoints();
+                stopImagePoll();   // 拖拽开始，优先用户操作
             } else {
                 selectedIndex = -1; renderPoints();
                 statusMsg.textContent = "未选中点";
@@ -698,7 +777,20 @@ function resetPoints() {
     if (confirm("确认删除所有控制点？")) {
         pointsT0 = []; pointsT1 = []; selectedIndex = -1; isDragging = false;
         renderPoints(); updateDataText();
-        statusMsg.textContent = "已重置"; sendPointsToBackend(false);
+        sendPointsToBackend(false);
+        // Return to view mode so idle animation resumes
+        inAnnotateMode = false;
+        currentMode = 'view';
+        document.getElementById('btn-create').classList.remove('active');
+        document.getElementById('btn-drag').classList.remove('active');
+        statusMsg.textContent = "待机中";
+        modeHint.textContent = "点击 Create 进入标注模式";
+        svg.style.cursor = "default";
+        fetch('/api/control/mode', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'view' })
+        }).catch(() => {});
+        startImagePoll();
     }
 }
 
@@ -739,10 +831,17 @@ async function fetchCurrentImage() {
             currentImgPath = result.image_src;
             img.src = result.image_src;
             statusMsg.textContent = `切换帧: ${result.image_src.split('/').pop()}`;
-            if (result.t0_points && result.t0_points.length > 0) {
-                pointsT0 = result.t0_points.map(p => ({x: p[0], y: p[1]}));
-                if (pointsT1.length === 0) pointsT1 = [...pointsT0];
-                renderPoints(); updateDataText();
+            // Passive frame change: shift both T0 and T1 by the keypoint delta
+            if (pointsT0.length > 0 && result.t0_points &&
+                result.t0_points.length === pointsT0.length) {
+                for (let i = 0; i < pointsT0.length; i++) {
+                    const nx = result.t0_points[i][0], ny = result.t0_points[i][1];
+                    const dx = nx - pointsT0[i].x,    dy = ny - pointsT0[i].y;
+                    pointsT0[i] = { x: nx, y: ny };
+                    pointsT1[i] = { x: pointsT1[i].x + dx, y: pointsT1[i].y + dy };
+                }
+                renderPoints();
+                updateDataText();
             }
         }
     } catch(e) { console.error("Failed to fetch latest image:", e); }
@@ -759,6 +858,7 @@ function togglePersonaEditor() {} // kept for compat
 async function fetchPersonaList() {
     try {
         const res = await fetch('/api/personas');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const sel = document.getElementById('persona-select');
         const cur = sel.value;
@@ -771,7 +871,18 @@ async function fetchPersonaList() {
         }
         if (!sel.value && data['default']) sel.value = 'default';
         return data;
-    } catch(e) { return {}; }
+    } catch(e) {
+        console.error('[personas] fetch failed:', e);
+        // Ensure at least a default option exists as fallback
+        const sel = document.getElementById('persona-select');
+        if (sel && sel.options.length <= 1) {
+            const opt = document.createElement('option');
+            opt.value = 'default'; opt.textContent = 'default';
+            sel.appendChild(opt);
+            sel.value = 'default';
+        }
+        return { default: { name:'default', description:'', system_prompt:'', begin_dialogs:[] } };
+    }
 }
 
 function loadSelectedPersona() {
@@ -852,9 +963,36 @@ function newPersona() {
     document.getElementById('examples-list').innerHTML = '';
 }
 
-fetchPersonaList().then(data => {
-    // Restore the persona that was active in the current session;
-    // only fall back to 'default' when the session has no saved persona.
+// 启动时把 localStorage 里所有 session 的 personaData 同步到服务端，
+// 确保下拉栏能列出历史上用过的所有人格。
+(async function initPersonas() {
+    // 1. 先加载服务端已有的人格
+    const serverData = await fetchPersonaList();
+
+    // 2. 收集 localStorage 里所有 session 的 personaData（去重）
+    const localPersonas = {};
+    for (const s of sessions) {
+        const p = s.personaData;
+        if (p && p.name && p.name.trim()) {
+            localPersonas[p.name] = p;
+        }
+    }
+
+    // 3. 把服务端没有的人格上传（静默）
+    const missing = Object.values(localPersonas).filter(p => !serverData[p.name]);
+    if (missing.length > 0) {
+        await Promise.all(missing.map(p =>
+            fetch('/api/personas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(p)
+            }).catch(() => {})
+        ));
+        // 4. 重新拉取列表（现在包含所有人格）
+        await fetchPersonaList();
+    }
+
+    // 5. 恢复当前 session 的人格
     const s = sessions.find(x => x.id === currentSessionId);
     const saved = s && s.personaData && s.personaData.name ? s.personaData : null;
     if (saved) {
@@ -863,10 +1001,11 @@ fetchPersonaList().then(data => {
         const sel = document.getElementById('persona-select');
         if (sel) sel.value = saved.name;
     } else {
-        const p = data['default'];
+        const refreshed = await fetchPersonaList().catch(() => ({}));
+        const p = refreshed['default'];
         if (p) { applyPersonaToForm(p); activatePersona(p); document.getElementById('persona-select').value = 'default'; }
     }
-});
+})();
 
 // ================================================================
 // Session management
@@ -1118,6 +1257,138 @@ async function sendChat() {
         chatHistory.pop();
     } finally { isStreaming = false; btnSend.disabled = false; }
 }
+
+// ================================================================
+// Agent mode (always on)
+// ================================================================
+
+async function agentSendChat(userText) {
+    const btnSend = document.getElementById('btn-send');
+    btnSend.disabled = true; isStreaming = true;
+
+    // Create a streaming answer bubble immediately
+    const container = document.getElementById('chat-messages');
+    const answerDiv = document.createElement('div');
+    answerDiv.className = 'msg assistant';
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor-blink';
+    answerDiv.appendChild(cursor);
+    container.appendChild(answerDiv);
+    container.scrollTop = 99999;
+
+    let fullAnswer = '';
+    let finalMotion = 'neutral';
+
+    try {
+        const res = await fetch('/api/agent/chat', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: userText })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            answerDiv.textContent = '❌ ' + (err.error || '请求失败');
+            answerDiv.className = 'msg error';
+            return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read(); if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n'); buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const payload = line.slice(6).trim();
+                if (payload === '[DONE]') break;
+                try {
+                    const ev = JSON.parse(payload);
+                    if (ev.type === 'text_delta') {
+                        // Stream answer text in real time
+                        fullAnswer += ev.delta;
+                        answerDiv.textContent = fullAnswer;
+                        answerDiv.appendChild(cursor);
+                        container.scrollTop = 99999;
+                    } else if (ev.type === 'tool_call') {
+                        const d = document.createElement('div');
+                        d.className = 'msg tool-call';
+                        d.textContent = `🔧 调用工具 ${ev.name}…`;
+                        container.insertBefore(d, answerDiv);
+                        container.scrollTop = 99999;
+                    } else if (ev.type === 'tool_result') {
+                        const d = document.createElement('div');
+                        d.className = 'msg tool-result';
+                        d.textContent = '📋 ' + ev.content;
+                        container.insertBefore(d, answerDiv);
+                        container.scrollTop = 99999;
+                    } else if (ev.type === 'answer') {
+                        // Final answer metadata (motion badge etc.)
+                        finalMotion = ev.motion || 'neutral';
+                        if (!fullAnswer && ev.text) {
+                            fullAnswer = ev.text;
+                            answerDiv.textContent = fullAnswer;
+                        }
+                        if (finalMotion && finalMotion !== 'neutral') {
+                            const badge = document.createElement('span');
+                            badge.className = 'motion-badge';
+                            badge.textContent = finalMotion;
+                            answerDiv.appendChild(badge);
+                        }
+                    } else if (ev.type === 'motion') {
+                        finalMotion = ev.label;
+                    } else if (ev.type === 'error') {
+                        answerDiv.textContent = '❌ ' + ev.message;
+                        answerDiv.className = 'msg error';
+                    }
+                } catch(e) {}
+            }
+        }
+
+        // Finalize bubble
+        if (cursor.parentNode) cursor.remove();
+        if (!fullAnswer) {
+            answerDiv.remove();
+            // Remove the pre-pushed user message since there's no valid response
+            const last = chatHistory[chatHistory.length - 1];
+            if (last && last.role === 'user') chatHistory.pop();
+        } else {
+            // User message already pushed in window.sendChat; push assistant message
+            chatHistory.push({ role: 'assistant', content: fullAnswer });
+            saveCurrentSession();
+            renderSessionList();
+            autoRenameSession();
+        }
+    } catch(err) {
+        if (cursor.parentNode) cursor.remove();
+        answerDiv.textContent = '❌ 网络错误：' + err.message;
+        answerDiv.className = 'msg error';
+    } finally {
+        isStreaming = false; btnSend.disabled = false;
+    }
+}
+
+// ================================================================
+// Periodic image polling — drains server-side animation queue (view/idle mode only)
+// ================================================================
+startImagePoll();
+
+window.sendChat = async function() {
+    if (isStreaming) return;
+    const input = document.getElementById('chat-input');
+    const userText = input.value.trim(); if (!userText) return;
+
+    if (userText === '/reset') {
+        input.value = ''; chatHistory = []; saveCurrentSession(); resetChatDisplay();
+        appendMessage('assistant', '✅ 上下文已清空，继续聊吧！'); return;
+    }
+
+    input.value = '';
+    appendMessage('user', userText);
+    chatHistory.push({ role:'user', content:userText });
+    await agentSendChat(userText);
+};
 </script>
 </body>
 </html>
