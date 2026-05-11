@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
 
 import models
 import llm_service
-from Live2Diff.app.Live2D.animation import AnimationController
+from animation import AnimationController
 from rife import load_rife_model, interpolate_images
 
 # ----------------------------------------------------------------------
