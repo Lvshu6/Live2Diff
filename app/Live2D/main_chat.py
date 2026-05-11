@@ -326,7 +326,7 @@ class MainWindow(QMainWindow):
                 "get_track_points":   lambda: self._current_t0,
                 "get_image_center":   lambda: self._get_img_center(),
                 "is_queue_empty":     lambda: self._is_queue_empty(),
-                "add_paths_to_queue": lambda paths: self._add_paths_to_queue(paths),#开启补帧需要替换函数为_add_paths_with_rife(paths)
+                "add_paths_to_queue": lambda paths: self._add_paths_to_queue(paths),#开启补帧需要替换函数为 _add_paths_with_rife(paths),
                 "on_status":          lambda text: self.status_label.setText(text),
                 "on_complete":        lambda: self._on_anim_complete(),
             }
