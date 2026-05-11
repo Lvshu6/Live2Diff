@@ -54,7 +54,7 @@ IMAGE_BASE_REL_DIR = os.path.join(BASE_PATH, "images", "video_00027")
 IMAGE_BASE_PHYSICAL_DIR = os.path.abspath(IMAGE_BASE_REL_DIR)
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
-FPS = 30
+FPS = 60
 DEPTH_LIMIT = 10
 QUEUE_LEN = 10
 MAX_QUEUE_ADD = 10
@@ -231,8 +231,11 @@ class MainWindow(QMainWindow):
         # 动画控制器
         self.anim = AnimationController(
             {
-                "get_node_path": lambda: (self.image_path_queue[-1]
-         if self.image_path_queue else self.current_image_path),
+                "get_node_path": lambda: (
+                    self.image_path_queue[-1]
+                    if self.image_path_queue
+                    else self.current_image_path
+                ),
                 "get_track_points": lambda: self._current_t0,
                 "get_image_center": lambda: self._get_img_center(),
                 "is_queue_empty": lambda: self._is_queue_empty(),
@@ -251,7 +254,8 @@ class MainWindow(QMainWindow):
         # 图像切换定时器（持续运行）
         self.image_timer = QTimer(self)
         self.image_timer.timeout.connect(self._fetch_current_image)
-        self.image_timer.start(1000 // FPS)
+
+        self._adjust_image_timer_rate()
 
         # 动画进度检查定时器
         self.motion_check_timer = QTimer(self)
@@ -414,6 +418,7 @@ class MainWindow(QMainWindow):
             return
 
         self.anim.start(data["motions"], data["describe"])
+        self._adjust_image_timer_rate()
 
     def _on_llm_error(self, msg):
         print(f"[Main] LLM 错误: {msg}")
@@ -428,6 +433,13 @@ class MainWindow(QMainWindow):
         self.send_btn.setEnabled(True)
         self.status_label.setText("就绪")
         self._llm_busy = False
+        self._adjust_image_timer_rate()
+
+    def _adjust_image_timer_rate(self):
+        if self.anim.is_active:
+            self.image_timer.start(1000 // FPS)
+        else:
+            self.image_timer.start(6000 // FPS)
 
     def _on_mouse_sample(self, scene_x, scene_y):
         if self.anim.is_active:
@@ -438,6 +450,7 @@ class MainWindow(QMainWindow):
         dx = scene_x - center[0]
         dy = -(scene_y - center[1])
         self.anim.navigate_offset(dx, dy)
+        self.image_timer.start(1000 // FPS)
 
     def _on_gesture_complete(self, trajectory):
         self.anim.set_idle_enabled(True)
@@ -495,6 +508,7 @@ class MainWindow(QMainWindow):
     def _fetch_current_image(self):
         with self.queue_lock:
             if not self.image_path_queue:
+                self._adjust_image_timer_rate()
                 return
             new_path = self.image_path_queue.popleft()
 

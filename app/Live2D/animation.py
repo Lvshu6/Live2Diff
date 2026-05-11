@@ -26,6 +26,7 @@ class AnimationController:
 
         self._idle_enabled = False
         self._idle_waiting = False
+        # self._idle_count = 0
 
     @property
     def is_active(self) -> bool:
@@ -57,6 +58,7 @@ class AnimationController:
         self._describe = describe
         self._motion_target_node = None
         self._idle_waiting = False
+        # self._idle_count = 0
 
         center = self._callbacks["get_image_center"]()
         self._initial_img_center = center
@@ -330,8 +332,15 @@ class AnimationController:
         if not track:
             return
 
-        dx = random.uniform(-100, 100)
-        dy = random.uniform(-100, 100)
+        # if self._idle_count != 3:
+        #     self._idle_count += 1
+        #     return
+        # else:
+        #     self._idle_count = 0
+
+
+        dx = random.uniform(-5, 5)
+        dy = random.uniform(-20, 20)
         t1_target = [(x + dx, y + dy) for x, y in track]
 
         start_node = self._callbacks["get_node_path"]()
