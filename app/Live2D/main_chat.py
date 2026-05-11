@@ -11,7 +11,6 @@ LLM 驱动的虚拟主播 —— PyQt5 版
 import os
 import sys
 import json
-import time
 import threading
 from pathlib import Path
 from collections import deque
@@ -34,12 +33,11 @@ from PyQt5.QtWidgets import (
     QGraphicsScene,
     QGraphicsPixmapItem,
     QGraphicsPathItem,
-    QMessageBox,
 )
 
 import models
 import llm_service
-from animation import AnimationController
+from Live2Diff.app.Live2D.animation import AnimationController
 from rife import load_rife_model, interpolate_images
 
 # ----------------------------------------------------------------------
