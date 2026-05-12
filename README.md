@@ -12,7 +12,12 @@ pip install -r requirements.txt
 cd co-tracker
 pip install -e .
 cd ..
+
+#下载rife补帧模型权重
+wget https://hf-mirror.com/Lvshu6/Live2Diff/resolve/main/Live2D/train_log.zip
+unzip train_log.zip
 ```
+
 ## 运行示例
 ```bash
 # 从huggingface下载并解压角色包到app/Live2D文件夹下 https://hf-mirror.com/Lvshu6/Live2Diff
