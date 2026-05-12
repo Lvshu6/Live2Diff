@@ -250,13 +250,13 @@ _SYSTEM_PROMPT_TEMPLATE = """你是一个名为 nuero-sama 的女性虚拟主播
 
 正常回复时，先输出控制块，再输出回答文本：
 
-<ctrl>{{"motion":"动作标签","tool":null,"tool_args":{{}},"describe":"动作描述"}}</ctrl>
+<ctrl>{{"motion":"动作标签","tool":null,"tool_args":{{}}}}</ctrl>
 <answer>
 你的回答正文，可以多行
 </answer>
 
 需要调用工具时：
-<ctrl>{{"motion":"neutral","tool":"工具名","tool_args":{{"参数名":"参数值"}},"describe":"调用工具"}}</ctrl>
+<ctrl>{{"motion":"neutral","tool":"工具名","tool_args":{{"参数名":"参数值"}}}}</ctrl>
 <answer></answer>
 
 工具结果会以 [TOOL_RESULT: ...] 形式给出，之后你再按上面正常格式回复。
@@ -289,9 +289,12 @@ class AgentLLM:
             base_url=base_url,
         )
 
-        motions_list = "\n".join(
-            f"- {m}" for m in SemanticNavigator("nuero/labels.json").available_motions
-        )
+        try:
+            motions_list = "\n".join(
+                f"- {m}" for m in SemanticNavigator("nuero/labels.json").available_motions
+            )
+        except FileNotFoundError:
+            motions_list = "- neutral: 保持静止"
         self._system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
             motions_list=motions_list,
             tools_schema=tool_registry.schema_text(),
@@ -309,7 +312,10 @@ class AgentLLM:
           {"type": "text_delta", "delta": str}            — streaming answer chars
           {"type": "_raw",       "content": str}          — full raw response for history
         """
-        full_messages = [{"role": "system", "content": self._system_prompt}] + messages
+        # 每次调用动态注入当前时间，避免模型用训练数据里的旧日期
+        now_str = datetime.now(_TZ_CST).strftime("%Y年%m月%d日 %H:%M:%S")
+        sys_with_time = f"【当前北京时间：{now_str}】\n\n" + self._system_prompt
+        full_messages = [{"role": "system", "content": sys_with_time}] + messages
         stream = self._client.chat.completions.create(
             model=self._model,
             messages=full_messages,
@@ -413,9 +419,14 @@ class AgentLLM:
                     except (json.JSONDecodeError, AttributeError):
                         pass
 
-            # 3. Last resort: strip all tags and emit raw text
+            # 3. Last resort: strip all tags and ctrl JSON, emit remaining text
             if not fallback_answer:
                 stripped = re.sub(r'<[^>]+>', '', full_text).strip()
+                # 去掉 ctrl 块 JSON（含 "motion" 键的对象），支持一层嵌套花括号
+                stripped = re.sub(
+                    r'\{(?:[^{}]|\{[^{}]*\})*"motion"(?:[^{}]|\{[^{}]*\})*\}?',
+                    '', stripped, flags=re.DOTALL
+                ).strip()
                 if stripped:
                     fallback_answer = stripped
 
