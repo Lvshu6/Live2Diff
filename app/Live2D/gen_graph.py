@@ -532,7 +532,7 @@ if __name__ == "__main__":
 
     GRID_SIZE    = 48
     RIFE_EXP     = 3
-    BASE         = Path("linghua2")
+    BASE         = Path("nuero")
     RIFE_CACHE   = BASE / "cache"
     IMAGE_ROOT   = BASE / "images"
     QUERIES_ROOT = BASE / "queries"

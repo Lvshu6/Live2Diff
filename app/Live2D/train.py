@@ -266,7 +266,7 @@ def train_model(
 # ================= 4. 主程序入口 =================
 
 if __name__ == "__main__":
-    ROOT        = Path("linghua2")
+    ROOT        = Path("nuero")
     BASE        = ROOT / "videos"
     DATA_FOLDER = BASE / "track"
 

@@ -79,7 +79,7 @@ class ModelPool:
         if not loaded:
             raise ValueError(f"Cannot detect the model type. File: {path}. Model hash: {model_hash}")
     def load_from_config(self, model_config, vram_config=None, vram_limit=None, clear_parameters=False):
-        print(f"Loading models from: {json.dumps(model_config["path"], indent=4)}")
+        print(f"Loading models from: {json.dumps(model_config['path'], indent=4)}")
         if vram_config is None:
             vram_config = self.default_vram_config()
         loaded = False
