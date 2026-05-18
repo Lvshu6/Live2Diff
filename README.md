@@ -29,7 +29,7 @@ cd app/Live2D
 wget https://hf-mirror.com/Lvshu6/Live2Diff/resolve/main/Live2D/nuero.zip
 unzip nuero.zip
 python app_qt5.py
-# 制作角色包，例如nuero，在app/Live2D/nuero/videos中存放若干视频片段(建议在20个25帧左右)，替换main函数中的BASE目录为nuero，依次运行train.py和gen_graph.py
+# 制作角色包(需要rife模型补帧)，例如nuero，在app/Live2D/nuero/videos中存放若干视频片段(建议在20个25帧左右)，替换main函数中的BASE目录为nuero，依次运行train.py和gen_graph.py
 python train.py # 训练角色专用相邻帧模型best_model.pth(用于拼接视频片段构建相邻帧网络graph.txt)
 python gen_graph.py # 生成graph.txt
 
