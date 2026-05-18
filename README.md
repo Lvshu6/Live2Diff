@@ -31,7 +31,7 @@ unzip nuero.zip
 python app_qt5.py
 # 制作角色包(需要rife模型补帧)，例如nuero，在app/Live2D/nuero/videos中存放若干视频片段(建议在20个25帧左右)，替换main函数中的BASE目录为nuero，依次运行train.py和gen_graph.py
 python train.py # 训练角色专用相邻帧模型best_model.pth(用于拼接视频片段构建相邻帧网络graph.txt)
-python gen_graph.py # 生成graph.txt
+python gen_graph.py # 生成graph.txt,连通分量=1，说明所有片段连接成一个图，连通分量>1说明没有完全拼接成功，需要调整参数重新训练best_model.pth
 
 ```
 
