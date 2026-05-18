@@ -33,7 +33,7 @@ def get_unique_path(input_path):
         num += 1
 
 def load_wan_pipe():
-    path = "WanFlow/Wan2.1-Fun-V1.1-14B-InP/full/0315/epoch-6.safetensors"
+    path = "models/FlowLineAdapter/flow_line_adapter.safetensors"
     print("正在加载 WanFlow 模型...")
     pipe = WanVideoPipeline.from_pretrained(
         torch_dtype=torch.bfloat16, device=DEFAULT_DEVICE,
