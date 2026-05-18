@@ -17,7 +17,7 @@ Model = None
 WanPipe = None
 DEFAULT_DEVICE = "cuda"
 SELECT_RADIUS = 7
-BASE_DIR = "gradio_outputs"
+BASE_DIR = "outputs"
 # ==================== Original Utility Functions ====================
 def get_unique_path(input_path):
     base_path = Path(input_path).absolute()
@@ -85,7 +85,7 @@ def wan_flow(img, flow_path):
         seed=0, tiled=True, height=img_height, width=img_width, 
         num_inference_steps=20, num_frames=len(flow)
     )
-    path = Path(BASE_DIR) /"output"/ "video.mp4"
+    path = Path(BASE_DIR) /"videos"/ "video.mp4"
     path.parent.mkdir(parents=True, exist_ok=True)
     path = get_unique_path(path.as_posix())
     save_video(video, path, fps=15, quality=5)

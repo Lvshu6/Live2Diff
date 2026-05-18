@@ -18,11 +18,21 @@ wget https://hf-mirror.com/Lvshu6/Live2Diff/resolve/main/Live2D/train_log.zip
 unzip train_log.zip
 ```
 
-## 运行示例
+## 运行示例(Live2D)
 ```bash
 # 从huggingface下载并解压角色包到app/Live2D文件夹下 https://hf-mirror.com/Lvshu6/Live2Diff
 cd app/Live2D
 wget https://hf-mirror.com/Lvshu6/Live2Diff/resolve/main/Live2D/nuero.zip
 unzip nuero.zip
 python app_qt5.py
+```
+
+## 运行示例(diffusion)
+```bash
+# 下载模型权重到models/FlowLineAdapter
+cd models/FlowLineAdapter
+wget https://hf-mirror.com/Lvshu6/Live2Diff/resolve/main/models/FlowLineAdapter/flow_line_adapter.safetensors
+cd ../..
+# 运行webui(首次生成视频时自动下载模型权重) 
+python app/diffusion/app.py
 ```
