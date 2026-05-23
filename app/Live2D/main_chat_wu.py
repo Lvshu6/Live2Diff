@@ -1,3 +1,6 @@
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
 import os
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "6"
@@ -18,6 +21,8 @@ import models
 from PIL import Image
 from pathlib import Path
 from openai import AsyncOpenAI
+from animation import AnimationController
+from agent_service import AgentLLM, SemanticNavigator, ToolRegistry
 
 BASE_PATH = "nuero"
 
@@ -68,8 +73,48 @@ listen_task = None
 
 # DeepSeek client (OpenAI-compatible)
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+
+# ------------------------------------------------------------------
+# Agent 全局实例
+# ------------------------------------------------------------------
+IMAGE_WIDTH, IMAGE_HEIGHT = 480, 656   # nuero frame size
+
+_tool_registry = ToolRegistry()
+_navigator = SemanticNavigator()
+_agent_llm: AgentLLM | None = None
+
+def _get_agent_llm() -> AgentLLM:
+    global _agent_llm
+    if _agent_llm is None:
+        _agent_llm = AgentLLM(_tool_registry, api_key=DEEPSEEK_API_KEY)
+    return _agent_llm
+
+def _anim_get_node_path():
+    key = current_image_path.lstrip("/")
+    if image_path_queue:
+        key = list(image_path_queue)[-1]
+    return key
+
+def _anim_add_paths(paths):
+    added = 0
+    for p in paths:
+        image_path_queue.append(p)
+        added += 1
+    return added
+
+_anim_controller = AnimationController({
+    "get_node_path":    _anim_get_node_path,
+    "get_track_points": lambda: models.NODE_POSITIONS.get(
+        current_image_path.lstrip("/"), []
+    ),
+    "get_image_center": lambda: (IMAGE_WIDTH / 2.0, IMAGE_HEIGHT / 2.0),
+    "is_queue_empty":   lambda: len(image_path_queue) == 0,
+    "add_paths_to_queue": _anim_add_paths,
+    "on_status":        lambda text: print(f"[anim] {text}"),
+    "on_complete":      lambda: print("[anim] 动画完成"),
+})
 deepseek_client = AsyncOpenAI(
-    api_key=DEEPSEEK_API_KEY,
+    api_key=DEEPSEEK_API_KEY or "none",
     base_url="https://api.deepseek.com/v1",
 )
 
@@ -168,12 +213,21 @@ async def listen_points_update():
     global last_points_hash, points_data
     while True:
         async with data_lock:
-            current_hash = hash(str(points_data))
-            if current_hash != last_points_hash and len(image_path_queue) <= 5:
-                last_points_hash = current_hash
-                add_image_to_queue()
-                print(f"🔄 检测到点数据更新，队列长度: {len(image_path_queue)}")
+            # 只有 t1 非空时才触发寻路，避免空点时无意义的计算
+            if points_data["t1"]:
+                current_hash = hash(str(points_data))
+                if current_hash != last_points_hash and len(image_path_queue) <= 5:
+                    last_points_hash = current_hash
+                    add_image_to_queue()
         await asyncio.sleep(0.1)
+
+
+async def _motion_tick_loop():
+    """Async wrapper that calls AnimationController.tick() every 80 ms."""
+    loop = asyncio.get_event_loop()
+    while True:
+        await loop.run_in_executor(None, _anim_controller.tick)
+        await asyncio.sleep(0.08)
 
 
 @app.on_event("startup")
@@ -181,6 +235,8 @@ async def startup_event():
     global listen_task
     if not listen_task_started:
         listen_task = asyncio.create_task(listen_points_update())
+        asyncio.create_task(_motion_tick_loop())
+        _anim_controller.set_idle_enabled(True)
         print("✅ 服务启动完成，点数据监听任务已创建")
 
 
@@ -230,13 +286,18 @@ def find_best_node(t1_points: List, start_node: str = None, max_depth: int = 10)
 @app.post("/api/best-frame")
 async def get_best_frame(data: Dict[str, Any]):
     """拖动专用接口：接收当前 T1 坐标，在当前帧邻域内返回最匹配帧。"""
+    global current_image_path
     t1 = data.get("t1", [])
+    # 允许前端传入当前显示帧，用于保证服务端 BFS 起点与前端同步
+    client_current = data.get("current_image_path", "").lstrip("/")
     if not t1:
         return JSONResponse(content={"image_src": "/" + current_image_path, "t0_points": []})
-    start = current_image_path.lstrip('/')
+    start = client_current if client_current else current_image_path.lstrip("/")
     loop = asyncio.get_event_loop()
     best_node = await loop.run_in_executor(None, find_best_node, t1, start, 10)
     t0_positions = models.NODE_POSITIONS.get(best_node, [])
+    # 同步服务端当前帧，防止下次 BFS 从初始帧重新搜索
+    current_image_path = best_node
     return JSONResponse(content={
         "image_src": "/" + best_node,
         "t0_points": t0_positions
@@ -467,6 +528,132 @@ async def chat(data: Dict[str, Any]):
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ------------------------------------------------------------------
+# Agent 路由
+# ------------------------------------------------------------------
+
+@app.get("/api/agent/motions")
+async def agent_motions():
+    """返回可用的语义动作标签列表。"""
+    return JSONResponse(content={"motions": _navigator.available_motions})
+
+
+@app.get("/api/agent/tools")
+async def agent_tools():
+    """返回可用工具列表。"""
+    from agent_service import TOOL_DEFINITIONS
+    return JSONResponse(content={"tools": TOOL_DEFINITIONS})
+
+
+@app.post("/api/agent/chat")
+async def agent_chat(data: Dict[str, Any]):
+    """
+    Agent 对话端点（SSE）。
+    请求体: { "message": "用户输入" }
+    事件流:
+      data: {"type": "tool_call",   "name": ..., "args": ...}
+      data: {"type": "tool_result", "content": ...}
+      data: {"type": "answer",      "text": ..., "motion": ..., "describe": ...}
+      data: {"type": "motion",      "label": ...}
+      data: [DONE]
+    """
+    message = data.get("message", "").strip()
+    if not message:
+        return JSONResponse(status_code=400, content={"error": "message 不能为空"})
+    if not DEEPSEEK_API_KEY:
+        return JSONResponse(status_code=503, content={"error": "未配置 DEEPSEEK_API_KEY"})
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _run_agent():
+            try:
+                agent = _get_agent_llm()
+                for event in agent.chat(message):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except Exception as exc:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"type": "error", "message": str(exc)}
+                )
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        loop.run_in_executor(None, _run_agent)
+
+        try:
+            while True:
+                event = await queue.get()
+                if event is _SENTINEL:
+                    break
+
+                if event.get("type") == "motion":
+                    label = event.get("label", "neutral")
+                    current_key = current_image_path.lstrip("/")
+                    current_t0 = models.NODE_POSITIONS.get(current_key, [])
+                    paths = await loop.run_in_executor(
+                        None,
+                        lambda lbl=label, ck=current_key, t0=current_t0:
+                            _navigator.navigate_to(lbl, ck, t0)
+                    )
+                    if paths:
+                        _anim_controller.start_by_path(paths, label)
+
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ------------------------------------------------------------------
+# 模式控制
+# ------------------------------------------------------------------
+
+@app.post("/api/control/clear-queue")
+async def clear_image_queue():
+    image_path_queue.clear()
+    return JSONResponse(content={"status": "success"})
+
+
+@app.post("/api/control/mode")
+async def set_control_mode(data: Dict[str, Any]):
+    """切换前端交互模式。
+    mode='annotate': 停止 idle、清队列、复位初始帧（进入标注/拖拽流程）
+    mode='view':     恢复 idle（回到待机状态）
+    """
+    global current_image_path
+    mode = data.get("mode", "view")
+    if mode == "annotate":
+        _anim_controller.set_idle_enabled(False)
+        image_path_queue.clear()
+        current_image_path = os.path.join(IMAGE_BASE_REL_DIR, "000000.png")
+        return JSONResponse(content={
+            "status": "success",
+            "mode": "annotate",
+            "image_src": "/" + current_image_path,
+        })
+    elif mode == "view":
+        image_path_queue.clear()
+        _anim_controller.set_idle_enabled(True)
+        return JSONResponse(content={"status": "success", "mode": "view"})
+    return JSONResponse(status_code=400, content={"error": "unknown mode"})
 
 
 # ------------------------------------------------------------------
